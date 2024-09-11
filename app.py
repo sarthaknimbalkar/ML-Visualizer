@@ -1,20 +1,22 @@
 import matplotlib.pyplot as plt
 import streamlit as st
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.naive_bayes import GaussianNB
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 import numpy as np
 import pandas as pd
+import pickle
 
 # Constants
 DATA_PATH = 'concertriccir2.csv'
 RANDOM_STATE = 42
 
+@st.cache_data
 def load_data():
     """Load dataset from CSV."""
     df = pd.read_csv(DATA_PATH)
@@ -62,18 +64,68 @@ def get_classifier(name):
         max_depth = st.sidebar.slider('Max Depth', 1, 50, 3)
         return GradientBoostingClassifier(n_estimators=n_estimators, learning_rate=learning_rate, max_depth=max_depth, random_state=RANDOM_STATE)
 
+def tune_hyperparameters(clf, X_train, y_train):
+    """Tune hyperparameters using GridSearchCV."""
+    param_grid = {}
+    if isinstance(clf, RandomForestClassifier):
+        param_grid = {
+            'n_estimators': [50, 100, 200],
+            'max_features': [None, 'sqrt', 'log2'],
+            'max_depth': [None, 10, 20, 30],
+            'bootstrap': [True, False]
+        }
+    elif isinstance(clf, GradientBoostingClassifier):
+        param_grid = {
+            'n_estimators': [50, 100, 200],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'max_depth': [3, 5, 7]
+        }
+    # Add more parameter grids for other classifiers as needed
+
+    grid_search = GridSearchCV(clf, param_grid, cv=5, scoring='accuracy', n_jobs=-1)
+    grid_search.fit(X_train, y_train)
+    return grid_search.best_estimator_
+
 def plot_decision_boundary(X, y, clf):
     """Plot the decision boundary of the classifier."""
     XX, YY, input_array = draw_meshgrid(X)
     labels = clf.predict(input_array)
 
     fig, ax = plt.subplots()
-    ax.scatter(X.T[0], X.T[1], c=y, cmap='rainbow', edgecolor='k', s=20)
+    scatter = ax.scatter(X.T[0], X.T[1], c=y, cmap='rainbow', edgecolor='k', s=20)
     ax.contourf(XX, YY, labels.reshape(XX.shape), alpha=0.5, cmap='rainbow')
     plt.xlabel("Col1")
     plt.ylabel("Col2")
     plt.title(f"Decision Boundary of {clf.__class__.__name__}")
+    plt.colorbar(scatter)
     return fig
+
+def display_metrics(y_test, y_pred):
+    """Display evaluation metrics."""
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average='weighted')
+    recall = recall_score(y_test, y_pred, average='weighted')
+    f1 = f1_score(y_test, y_pred, average='weighted')
+    conf_matrix = confusion_matrix(y_test, y_pred)
+
+    st.subheader("Evaluation Metrics")
+    st.write(f"Accuracy: {accuracy:.2f}")
+    st.write(f"Precision: {precision:.2f}")
+    st.write(f"Recall: {recall:.2f}")
+    st.write(f"F1-Score: {f1:.2f}")
+    st.write("Confusion Matrix:")
+    st.write(conf_matrix)
+
+@st.cache_resource
+def save_model(_clf, filename):
+    """Save the trained model to a file."""
+    with open(filename, 'wb') as file:
+        pickle.dump(_clf, file)
+
+def load_model(filename):
+    """Load a trained model from a file."""
+    with open(filename, 'rb') as file:
+        return pickle.load(file)
 
 # Load data
 X, y = load_data()
@@ -89,6 +141,7 @@ classifier_name = st.sidebar.selectbox(
 
 # Get and train classifier
 clf = get_classifier(classifier_name)
+clf = tune_hyperparameters(clf, X_train, y_train)  # Hyperparameter tuning
 clf.fit(X_train, y_train)
 y_pred = clf.predict(X_test)
 
@@ -96,6 +149,10 @@ y_pred = clf.predict(X_test)
 fig = plot_decision_boundary(X, y, clf)
 st.pyplot(fig)
 
-# Display accuracy
-accuracy = accuracy_score(y_test, y_pred)
-st.header(f"Accuracy ({classifier_name}) - {round(accuracy, 2)}")
+# Display metrics
+display_metrics(y_test, y_pred)
+
+# Save the model
+if st.sidebar.button('Save Model'):
+    save_model(clf, 'trained_model.pkl')
+    st.success("Model saved successfully!")
